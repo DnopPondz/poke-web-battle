@@ -32,8 +32,8 @@ export default function GachaPage() {
         .eq("id", user.id)
         .single();
 
-      if (profile.coins < 1500) {
-        throw new Error("เงินไม่พอ! ต้องการ 1500 Coins");
+      if (profile.coins < 500) {
+        throw new Error("เงินไม่พอ! ต้องการ 500 Coins");
       }
 
       // 3. เริ่มสุ่ม (RNG Logic)
@@ -57,7 +57,7 @@ export default function GachaPage() {
       // 4.1 หักเงิน
       const { error: updateError } = await supabase
         .from("profiles")
-        .update({ coins: profile.coins - 1500 })
+        .update({ coins: profile.coins - 500 })
         .eq("id", user.id);
       
       if (updateError) throw updateError;
@@ -110,7 +110,7 @@ export default function GachaPage() {
         </Link>
         <div className="flex items-center gap-2 bg-slate-800/80 px-4 py-2 rounded-full border border-slate-700">
           <Coins className="h-4 w-4 text-yellow-400" />
-          <span className="font-bold text-sm">1500 Coins / Pull</span>
+          <span className="font-bold text-sm">500 Coins / Pull</span>
         </div>
       </div>
 
@@ -145,7 +145,7 @@ export default function GachaPage() {
                 onClick={pullGacha}
                 className="px-8 py-3 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-bold shadow-lg shadow-purple-500/30 transition-transform active:scale-95 flex items-center gap-2 mx-auto"
               >
-                <Sparkles className="h-5 w-5" /> สุ่มเลย (1500)
+                <Sparkles className="h-5 w-5" /> สุ่มเลย (500)
               </button>
             </motion.div>
           )}
