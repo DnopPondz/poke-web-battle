@@ -1,4 +1,3 @@
-// src/store/profileStore.js
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 
@@ -26,4 +25,15 @@ export const useProfileStore = create((set, get) => ({
       console.error("Error fetching profile from store:", error);
     }
   },
+
+  // === NEW FUNCTION: Deduct coins locally for immediate UI update ===
+  deductCoinsLocally: (amount) => {
+    set((state) => ({
+      profile: {
+        ...state.profile,
+        coins: state.profile.coins - amount,
+      },
+    }));
+  },
+  // =================================================================
 }));

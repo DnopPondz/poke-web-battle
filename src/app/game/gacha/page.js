@@ -6,12 +6,17 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Coins, Loader2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useProfileStore } from "@/store/profileStore"; // <<<< NEW IMPORT
 
 export default function GachaPage() {
   const router = useRouter();
   const [status, setStatus] = useState("idle"); // idle, pulling, result
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // GET STATE AND LOCAL DEDUCT FUNCTION FROM STORE
+  const { profile, deductCoinsLocally } = useProfileStore();
+  const PULL_COST = 500;
 
   // ฟังก์ชันสุ่มกาชา
   const pullGacha = async () => {
@@ -25,39 +30,41 @@ export default function GachaPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("กรุณาเข้าสู่ระบบใหม่");
 
-      // 2. เช็คเงิน และ หักเงิน (ใช้ RPC หรือเช็คธรรมดาก่อนก็ได้ เพื่อความง่ายเราเช็คธรรมดา)
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("coins")
-        .eq("id", user.id)
-        .single();
-
-      if (profile.coins < 500) {
-        throw new Error("เงินไม่พอ! ต้องการ 500 Coins");
+      // 2. เช็คเงิน (ใช้ค่าจาก Store)
+      const currentCoins = profile.coins; 
+      
+      if (currentCoins < PULL_COST) {
+        // หากเงินไม่พอ จะไม่ทำ Optimistic Update และโยน Error
+        throw new Error(`เงินไม่พอ! ต้องการ ${PULL_COST} Coins`);
       }
 
-      // 3. เริ่มสุ่ม (RNG Logic)
-      // สุ่ม Pokemon ID (Gen 1: 1-151)
+      // === OPTIMISTIC UPDATE: ลดเงินใน Navbar ทันที ===
+      deductCoinsLocally(PULL_COST);
+      // ===============================================
+
+      // 3. เริ่มสุ่ม (RNG Logic: ใช้ API Data-driven Rarity)
       const randomId = Math.floor(Math.random() * 151) + 1;
       
       // ดึงข้อมูลจาก PokeAPI
       const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${randomId}`);
+      if (!res.ok) throw new Error(`PokeAPI call failed for ID ${randomId}`);
+      
       const pokeData = await res.json();
 
-      // คำนวณ Rarity (แบบบ้านๆ)
+      // คำนวณ Rarity (Dynamic logic จาก BST ของ API)
       const baseStat = pokeData.stats.reduce((acc, curr) => acc + curr.base_stat, 0);
       let rarity = "N";
       if (baseStat > 500) rarity = "SSR";
       else if (baseStat > 400) rarity = "SR";
       else if (baseStat > 300) rarity = "R";
 
-      // 4. บันทึก Transaction (หักเงิน + เพิ่มของ)
-      // หมายเหตุ: จริงๆ ควรใช้ Database Transaction แต่เพื่อความง่ายเราทำทีละ step
+      // 4. บันทึก Transaction (Persistent Update ใน DB)
       
       // 4.1 หักเงิน
+      const newCoins = currentCoins - PULL_COST; // ใช้ currentCoins ที่ดึงมาจาก store ก่อนหัก local
       const { error: updateError } = await supabase
         .from("profiles")
-        .update({ coins: profile.coins - 500 })
+        .update({ coins: newCoins }) 
         .eq("id", user.id);
       
       if (updateError) throw updateError;
@@ -83,13 +90,16 @@ export default function GachaPage() {
 
       if (insertError) throw insertError;
 
-      // 5. สำเร็จ! แสดงผล (หน่วงเวลานิดนึงให้อนิเมชั่นทำงาน)
+      // 5. สำเร็จ! แสดงผล
       setTimeout(() => {
         setResult(newPokemon);
         setStatus("result");
       }, 2000);
 
     } catch (err) {
+      // Note: ในกรณีที่เกิด Error (เช่น DB Update ล้มเหลว)
+      // Navbar.js จะทำการ fetchProfile ใหม่ ซึ่งจะซิงค์ค่าจาก DB กลับมาอัตโนมัติ
+      console.error(err);
       setErrorMsg(err.message);
       setStatus("idle");
     }
