@@ -1,29 +1,67 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Search, Swords, Shield, Zap, Heart, Sparkles, ArrowUpCircle, Loader2 } from "lucide-react";
+import { ArrowLeft, Search, Swords, Shield, Zap, Heart, ArrowUpCircle, Loader2, Coins, Gem, AlertTriangle } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useProfileStore } from "@/store/profileStore";
+import EvolutionModal from "@/components/EvolutionModal"; 
 
-// ฐานข้อมูล Evolution (ย้ายมาที่นี่)
+// ฐานข้อมูล Evolution
 const EVOLUTION_CHAIN = {
-  1: { evolveTo: 2, level: 16, name: "Ivysaur" },
-  2: { evolveTo: 3, level: 32, name: "Venusaur" },
-  4: { evolveTo: 5, level: 16, name: "Charmeleon" },
-  5: { evolveTo: 6, level: 36, name: "Charizard" },
-  7: { evolveTo: 8, level: 16, name: "Wartortle" },
-  8: { evolveTo: 9, level: 36, name: "Blastoise" },
+  1: { evolveTo: 2, level: 16, name: "Ivysaur", cost: 500 }, 
+  2: { evolveTo: 3, level: 32, name: "Venusaur", cost: 1500 }, 
+  4: { evolveTo: 5, level: 16, name: "Charmeleon", cost: 500 },
+  5: { evolveTo: 6, level: 36, name: "Charizard", cost: 1500 },
+  7: { evolveTo: 8, level: 16, name: "Wartortle", cost: 500 },
+  8: { evolveTo: 9, level: 36, name: "Blastoise", cost: 1500 },
+  // 🔥 FIX: Magikarp Level ปรับเป็น 15 เพื่อให้ Level 16 ทดสอบได้
+  129: { evolveTo: 130, level: 15, name: "Gyarados", cost: 5000 }, 
 };
 
+function getEvolutionInfo(pokemonId) {
+    const info = EVOLUTION_CHAIN[pokemonId];
+    if (!info) return { canEvolve: false, nextId: null, nextName: null, cost: 0, level: 999 };
+    return {
+        canEvolve: true,
+        ...info,
+    };
+}
+
+// Helper function to fetch base stats (Used for stat recalculation)
+async function getBaseStats(id) {
+    const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
+    if (!res.ok) throw new Error(`PokeAPI status: ${res.status}`); // 🔥 ยืนยันการเช็คสถานะ
+    const data = await res.json();
+    return {
+        hp: data.stats.find(s => s.stat.name === 'hp').base_stat,
+        atk: data.stats.find(s => s.stat.name === 'attack').base_stat,
+        def: data.stats.find(s => s.stat.name === 'defense').base_stat,
+        spd: data.stats.find(s => s.stat.name === 'speed').base_stat,
+        image_url: data.sprites.other["official-artwork"].front_default,
+        name: data.name
+    };
+}
+
+
 export default function InventoryPage() {
+  const router = useRouter();
+  const { profile, fetchProfile } = useProfileStore();
+  
   const [loading, setLoading] = useState(true);
   const [inventory, setInventory] = useState([]);
   const [filter, setFilter] = useState("All");
-  const [evolvingId, setEvolvingId] = useState(null);
+  const [evolutionLoadingId, setEvolutionLoadingId] = useState(null);
+  const [evoCandidate, setEvoCandidate] = useState(null);
 
-  // Function: Fetch Inventory (ดึงข้อมูลล่าสุด)
-  const fetchInventory = async () => {
+  const userPokeScale = profile?.poke_scale || 0;
+  const userCoins = profile?.coins || 0;
+  const requiredCoins = 2500;
+
+
+  const fetchInventory = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -32,7 +70,7 @@ export default function InventoryPage() {
         .from("inventory")
         .select("*")
         .eq("user_id", user.id)
-        .order("obtained_at", { ascending: false });
+        .order("level", { ascending: false });
 
       if (error) throw error;
       setInventory(data);
@@ -41,59 +79,123 @@ export default function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchInventory();
-  }, []);
+  }, [fetchInventory]);
 
-  // ฟังก์ชันกดปุ่มเปลี่ยนร่าง
-  const handleEvolve = async (pokemon) => {
-    const evoInfo = EVOLUTION_CHAIN[pokemon.pokemon_id];
-    if (!evoInfo || pokemon.level < evoInfo.level) return;
+  // Logic เปิด Modal (Pre-Fetch Preview และเช็ค res.ok)
+  const handleOpenEvolution = async (pokemon) => {
+    const evoInfo = getEvolutionInfo(pokemon.pokemon_id);
+    if (!evoInfo.canEvolve || pokemon.level < evoInfo.level) return;
 
-    if (!confirm(`ต้องการพัฒนาร่าง ${pokemon.name} เป็น ${evoInfo.name} ใช่หรือไม่?`)) return;
-
-    setEvolvingId(pokemon.id);
-
+    setEvolutionLoadingId(pokemon.id);
+    
     try {
-      // 1. ดึงข้อมูลร่างใหม่จาก API
-      const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${evoInfo.evolveTo}`);
-      const newData = await res.json();
+        const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${evoInfo.nextId}`);
+        
+        // 🔥 FIX: เช็คสถานะ HTTP ก่อนแปลง JSON
+        if (!res.ok) {
+             throw new Error(`API failed: Status ${res.status}`);
+        }
+        
+        const nextData = await res.json();
+        
+        const nextPokePreview = {
+            name: evoInfo.nextName,
+            image_url: nextData.sprites.other["official-artwork"].front_default,
+        };
 
-      // 2. คำนวณ Stat โบนัส
-      const newStats = {
-        hp: pokemon.stats.hp + 20,
-        atk: pokemon.stats.atk + 10,
-        def: pokemon.stats.def + 10,
-        spd: pokemon.stats.spd + 10,
-      };
+        setEvoCandidate({
+            pokemon,
+            evoInfo,
+            nextPokePreview,
+            loading: false,
+        });
 
-      // 3. อัปเดต Database
-      const { error } = await supabase
-        .from("inventory")
-        .update({
-          pokemon_id: evoInfo.evolveTo,
-          name: evoInfo.name,
-          image_url: newData.sprites.other["official-artwork"].front_default,
-          stats: newStats,
-          rarity: "SR" 
-        })
-        .eq("id", pokemon.id);
-
-      if (error) throw error;
-
-      // 4. อัปเดต State หน้าเว็บทันที (สำคัญ: เรียก fetchInventory ใหม่)
-      await fetchInventory(); 
-      alert(`ยินดีด้วย! ${pokemon.name} เปลี่ยนร่างเป็น ${evoInfo.name} แล้ว!`);
-
-    } catch (err) {
-      console.error(err);
-      alert("เกิดข้อผิดพลาดในการเปลี่ยนร่าง");
+    } catch(e) {
+        console.error("Evolution Preview Error:", e);
+        // แสดงข้อความที่ชัดเจนขึ้น
+        alert(`ไม่สามารถโหลดข้อมูลร่างถัดไปได้: ${e.message || "PokeAPI Call Failed"}`);
     } finally {
-      setEvolvingId(null);
+        setEvolutionLoadingId(null);
     }
   };
+
+
+  // Logic ยืนยัน Evolution (จาก Modal)
+  const handleEvolveConfirm = async () => {
+    const { pokemon, evoInfo } = evoCandidate;
+    setEvoCandidate(prev => ({ ...prev, loading: true }));
+    
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (userCoins < requiredCoins) throw new Error("Coins ไม่พอ!"); 
+        if (userPokeScale < evoInfo.cost) throw new Error("Poke Scale ไม่พอ!");
+
+        // 1. ดึง Base Stats ร่างเก่า/ใหม่
+        const oldBaseStats = await getBaseStats(pokemon.pokemon_id);
+        const newBaseStats = await getBaseStats(evoInfo.nextId);
+
+        // 2. คำนวณ Stats ใหม่
+        const calculateNewStat = (statName) => {
+            const oldBase = oldBaseStats[statName];
+            const newBase = newBaseStats[statName];
+            const currentStat = pokemon.stats[statName];
+
+            if (oldBase === 0) return currentStat; 
+            const newStatValue = Math.floor(currentStat * (newBase / oldBase));
+            return newStatValue;
+        };
+
+        const newStats = {
+            hp: calculateNewStat('hp'),
+            atk: calculateNewStat('atk'),
+            def: calculateNewStat('def'),
+            spd: calculateNewStat('spd'),
+        };
+        
+        // 3. หัก Scale & Coins
+        const { error: profileError } = await supabase
+            .from("profiles")
+            .update({ 
+                poke_scale: userPokeScale - evoInfo.cost,
+                coins: userCoins - requiredCoins 
+            })
+            .eq("id", user.id);
+
+        if (profileError) throw profileError;
+
+        // 4. Update Inventory
+        const { error: invError } = await supabase
+            .from("inventory")
+            .update({
+                pokemon_id: evoInfo.nextId,
+                name: evoInfo.nextName,
+                image_url: evoCandidate.nextPokePreview.image_url,
+                stats: newStats,
+                rarity: "SR" 
+            })
+            .eq("id", pokemon.id);
+
+        if (invError) throw invError;
+        
+        // 5. Refetch Data
+        await fetchInventory();
+        await fetchProfile(); 
+        
+        setEvoCandidate(null);
+        alert(`ยินดีด้วย! ${pokemon.name} พัฒนาร่างเป็น ${evoInfo.nextName} แล้ว!`);
+
+    } catch (err) {
+        console.error(err);
+        setEvoCandidate(prev => ({ ...prev, loading: false })); 
+        alert(`วิวัฒนาการล้มเหลว: ${err.message}`);
+    }
+  };
+
 
   const filteredItems = filter === "All" ? inventory : inventory.filter(item => item.rarity === filter);
 
@@ -108,6 +210,16 @@ export default function InventoryPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 p-4 pb-24 md:p-8">
+      
+      {/* ⚠️ MODAL COMPONENT ⚠️ */}
+      {evoCandidate && (
+          <EvolutionModal 
+              candidate={evoCandidate}
+              onConfirm={handleEvolveConfirm}
+              onCancel={() => setEvoCandidate(null)}
+          />
+      )}
+
       {/* Header */}
       <div className="max-w-7xl mx-auto mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -133,14 +245,16 @@ export default function InventoryPage() {
       {/* Grid Display */}
       <div className="max-w-7xl mx-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
         {loading ? (
+          // 1. Loading state
           [...Array(6)].map((_, i) => <div key={i} className="aspect-[3/4] rounded-2xl bg-slate-900 animate-pulse border border-slate-800" />)
         ) : filteredItems.length > 0 ? (
+          // 2. Content state
           filteredItems.map((poke) => {
             const maxExp = poke.level * 100;
             const expPercent = Math.min(100, (poke.exp / maxExp) * 100);
             
-            const evoInfo = EVOLUTION_CHAIN[poke.pokemon_id];
-            const canEvolve = evoInfo && poke.level >= evoInfo.level;
+            const evoInfo = getEvolutionInfo(poke.pokemon_id);
+            const canEvolve = evoInfo.canEvolve && poke.level >= evoInfo.level;
 
             return (
               <motion.div
@@ -175,29 +289,32 @@ export default function InventoryPage() {
                 </div>
 
                 {/* ปุ่ม EVOLVE */}
-                {canEvolve && (
+                {canEvolve ? (
                   <motion.button
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    onClick={() => handleEvolve(poke)}
-                    disabled={evolvingId === poke.id}
+                    onClick={() => handleOpenEvolution(poke)}
+                    disabled={evolutionLoadingId === poke.id}
                     className="mt-3 w-full py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white text-xs font-bold shadow-lg shadow-purple-500/20 flex items-center justify-center gap-1 z-20 hover:scale-105 transition-transform"
                   >
-                    {evolvingId === poke.id ? (
+                    {evolutionLoadingId === poke.id ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
                     ) : (
                       <>
-                        <ArrowUpCircle className="w-3 h-3" /> EVOLVE
+                        <ArrowUpCircle className="w-3 h-3" /> EVOLVE (LV {evoInfo.level})
                       </>
                     )}
                   </motion.button>
+                ) : evoInfo.canEvolve && (
+                   <div className="mt-3 w-full py-1.5 rounded-lg bg-slate-800 text-slate-500 text-xs font-bold flex items-center justify-center gap-1">
+                      Need LV {evoInfo.level}
+                   </div>
                 )}
-
-                <div className={`absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity bg-gradient-to-t ${poke.rarity === 'SSR' ? 'from-yellow-500' : poke.rarity === 'SR' ? 'from-red-500' : 'from-blue-500'}`} />
               </motion.div>
             );
           })
         ) : (
+          // 3. Empty state
           <div className="col-span-full py-20 text-center text-slate-500"><Search className="w-12 h-12 mx-auto mb-4 opacity-50" /><p>ไม่พบโปเกมอนในหมวดนี้</p></div>
         )}
       </div>

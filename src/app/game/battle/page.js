@@ -4,10 +4,10 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Swords, ArrowLeft, RotateCcw, Trophy, Zap, Flame, Droplets, Leaf, Star, ShieldPlus, ArrowUpCircle, Clock } from "lucide-react";
+import { Swords, ArrowLeft, RotateCcw, Trophy, Zap, Flame, Droplets, Leaf, Star, ShieldPlus, ArrowUpCircle, Clock, Gem } from "lucide-react";
 import Link from "next/link";
+import { useProfileStore } from "@/store/profileStore";
 
-// Moves Database (เหมือนเดิม)
 const MOVES_DB = {
   "Tackle": { name: "Tackle", type: "Normal", power: 50, accuracy: 100, cooldown: 0, icon: <Star className="w-4 h-4" /> },
   "Scratch": { name: "Scratch", type: "Normal", power: 50, accuracy: 100, cooldown: 0, icon: <Swords className="w-4 h-4" /> },
@@ -22,7 +22,6 @@ const MOVES_DB = {
   "Heal": { name: "Heal", type: "Support", power: 0, accuracy: 100, effect: "heal", cooldown: 3, icon: <ShieldPlus className="w-4 h-4 text-pink-400" /> },
 };
 
-// Evolution Chain (เอาไว้ใช้ใน Inventory Page)
 const EVOLUTION_CHAIN = {
   1: { evolveTo: 2, level: 16, name: "Ivysaur" },
   2: { evolveTo: 3, level: 32, name: "Venusaur" },
@@ -34,6 +33,7 @@ const EVOLUTION_CHAIN = {
 
 export default function BattlePage() {
   const router = useRouter();
+  const { fetchProfile } = useProfileStore(); 
   
   const [loading, setLoading] = useState(true);
   const [player, setPlayer] = useState(null);
@@ -48,7 +48,8 @@ export default function BattlePage() {
     coinGained: 0,
     leveledUp: false,
     oldLevel: 0,
-    newLevel: 0
+    newLevel: 0,
+    scaleDrop: 0 // 🔥 เพิ่ม scaleDrop
   });
 
   // AI Turn Logic
@@ -76,6 +77,7 @@ export default function BattlePage() {
           return router.replace("/game");
         }
         await supabase.from("profiles").update({ energy: profile.energy - 1 }).eq("id", user.id);
+        fetchProfile(); // อัปเดต Navbar ทันทีหลังตัด Energy
 
         // 2. Load Player Pokemon
         const { data: myPoke } = await supabase
@@ -171,7 +173,7 @@ export default function BattlePage() {
     }
 
     if (move.effect === "heal") {
-      const healAmount = Math.floor(attacker.maxHp * 0.5); // Heal 50%
+      const healAmount = Math.floor(attacker.maxHp * 0.5); 
       if (role === "player") {
         setPlayer(prev => ({ ...prev, currentHp: Math.min(prev.maxHp, prev.currentHp + healAmount) }));
       } else {
@@ -220,13 +222,14 @@ export default function BattlePage() {
     }
   };
 
-  // 🔥 ฟังก์ชันจบเกม: EXP & Level Up บันทึกลง DB 🔥
+  // 🔥 ฟังก์ชันจบเกม: EXP, Coin, และ SCALE Drop 🔥
   const handleEndGame = async (isWin) => {
     if (!isWin) return;
     
     try {
       const expGain = 50 * enemy.level;
       const coinGain = 50 + (enemy.level * 10);
+      const scaleDrop = Math.floor(Math.random() * 20) + 1; // 🔥 Drop Scale 1-20
 
       let updatedStats = { ...player.stats };
       let newLevel = player.level;
@@ -248,28 +251,41 @@ export default function BattlePage() {
       }
 
       // 1. อัปเดต Inventory
-      const { error } = await supabase
+      const { error: invError } = await supabase
         .from("inventory")
         .update({
           level: newLevel,
           exp: newExp,
-          stats: updatedStats, // บันทึก Stats ใหม่
+          stats: updatedStats, 
         })
         .eq("id", player.id); 
 
-      if (error) throw error;
+      if (invError) throw invError;
 
-      // 2. อัปเดตเงิน User
+      // 2. อัปเดตเงินและ Poke Scale User
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("coins").eq("id", user.id).single();
-      await supabase.from("profiles").update({ coins: profile.coins + coinGain }).eq("id", user.id);
+      const { data: profile } = await supabase.from("profiles").select("coins, poke_scale").eq("id", user.id).single();
+
+      const { error: profileError } = await supabase
+          .from("profiles")
+          .update({ 
+              coins: profile.coins + coinGain,
+              poke_scale: profile.poke_scale + scaleDrop // 🔥 บันทึก Scale
+          })
+          .eq("id", user.id);
+
+      if (profileError) throw profileError;
+
+      // 3. สั่งให้ Global Store ดึงข้อมูล Coins/Energy/Scale ล่าสุดทันที
+      fetchProfile(); 
 
       setBattleResult({
         expGained: expGain,
         coinGained: coinGain,
         leveledUp,
         oldLevel,
-        newLevel
+        newLevel,
+        scaleDrop // 🔥 ส่ง Scale Drop ไปแสดงผล
       });
 
     } catch (error) {
@@ -337,6 +353,7 @@ export default function BattlePage() {
                   <div className="flex justify-center gap-4 text-sm">
                     <span className="bg-slate-800 px-3 py-1 rounded text-emerald-400">+{battleResult.expGained} EXP</span>
                     <span className="bg-slate-800 px-3 py-1 rounded text-yellow-400">+{battleResult.coinGained} Coins</span>
+                    <span className="bg-slate-800 px-3 py-1 rounded text-cyan-400">+{battleResult.scaleDrop} Scale</span>
                   </div>
                   {battleResult.leveledUp && (
                     <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="bg-gradient-to-r from-blue-600 to-cyan-600 p-4 rounded-xl mx-auto max-w-sm shadow-lg border border-blue-400">
