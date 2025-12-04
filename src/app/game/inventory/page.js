@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Search, Swords, Shield, Zap, Heart, ArrowUpCircle, Loader2, Coins, Gem, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Search, Swords, Shield, Zap, Heart, ArrowUpCircle, Loader2, Coins, Gem, AlertTriangle, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useProfileStore } from "@/store/profileStore";
@@ -11,12 +11,9 @@ import EvolutionModal from "@/components/EvolutionModal";
 import { getEvolutionCost } from "@/lib/evolutionLibrary";
 import evolutionOverrides from "@/app/pokedexdata/evolution_settings.json";
 
-// 1. นำเข้าไฟล์ตั้งค่าที่เราสร้างแยกไว้
-import evolutionSettings from "@/app/pokedexdata/evolution_settings.json";
+// --- Helper Functions ---
 
-// ฟังก์ชันดึงข้อมูลร่างพัฒนาถัดไปจาก PokeAPI + JSON Config
 async function fetchNextEvolutionInfo(pokemonId) {
-    // ... (ส่วนดึง API Species เหมือนเดิม) ...
     const speciesRes = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${pokemonId}`);
     if (!speciesRes.ok) throw new Error(`Species API failed`);
     const speciesData = await speciesRes.json();
@@ -24,7 +21,6 @@ async function fetchNextEvolutionInfo(pokemonId) {
     const evoChainUrl = speciesData.evolution_chain?.url;
     if (!evoChainUrl) return { canEvolve: false };
     
-    // ... (ส่วนดึง API Chain เหมือนเดิม) ...
     const evoChainRes = await fetch(evoChainUrl);
     if (!evoChainRes.ok) throw new Error(`Evo Chain API failed`);
     const evoChainData = await evoChainRes.json();
@@ -36,27 +32,20 @@ async function fetchNextEvolutionInfo(pokemonId) {
         
         if (fromId === currentId) {
             if (chain.evolves_to.length > 0) {
-                // เลือกสายวิวัฒนาการแรก
                 const nextEvo = chain.evolves_to[0]; 
                 const nextId = getIdFromUrl(nextEvo.species.url);
                 const nextName = nextEvo.species.name;
 
-                // หา Level
                 const levelDetail = nextEvo.evolution_details.find(d => d.trigger.name === 'level-up');
                 const apiLevel = levelDetail?.min_level;
 
-                // === 🔥 ส่วนคำนวณราคาอัตโนมัติ + Override ===
-                
-                // 1. คำนวณราคามาตรฐานจาก Rarity (ครอบคลุมทุกตัว)
                 let finalCost = getEvolutionCost(nextId);
 
-                // 2. ถ้ามีการกำหนด Override ในไฟล์ JSON ให้ใช้ค่านั้นแทน
                 const override = evolutionOverrides[nextId.toString()];
                 if (override && override.cost) {
                     finalCost = override.cost;
                 }
 
-                // กำหนด Level (ถ้า API ไม่มี ให้ Default 20 หรือตาม Override)
                 const finalLevel = override?.level || apiLevel || 20; 
 
                 return { 
@@ -85,7 +74,6 @@ async function fetchNextEvolutionInfo(pokemonId) {
     return { canEvolve: false };
 }
 
-// Helper: ดึง Base Stats (เหมือนเดิม)
 async function getBaseStats(id) {
     const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
     if (!res.ok) throw new Error(`PokeAPI status: ${res.status}`); 
@@ -102,6 +90,8 @@ async function getBaseStats(id) {
     };
 }
 
+// --- Main Component ---
+
 export default function InventoryPage() {
   const router = useRouter();
   const { profile, fetchProfile } = useProfileStore();
@@ -109,8 +99,15 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true);
   const [inventory, setInventory] = useState([]);
   const [filter, setFilter] = useState("All");
+  
+  // State สำหรับ Loading ของปุ่ม
   const [evolutionLoadingId, setEvolutionLoadingId] = useState(null);
+  // State สำหรับ Modal
   const [evoCandidate, setEvoCandidate] = useState(null);
+  
+  // 🔥 New State: เก็บสถานะปุ่มของแต่ละตัว (Cache)
+  // Format: { [inventoryId]: { status: 'MAX' | 'LOCKED' | 'READY', detail: object } }
+  const [evoStatusCache, setEvoStatusCache] = useState({});
 
   const fetchInventory = useCallback(async () => {
     try {
@@ -136,27 +133,9 @@ export default function InventoryPage() {
     fetchInventory();
   }, [fetchInventory]);
 
-  // Logic เปิด Modal (Updated)
-  const handleOpenEvolution = async (pokemon) => {
-    setEvolutionLoadingId(pokemon.id);
-    
+  // ฟังก์ชันเปิด Modal (แยกออกมาเพื่อใช้ซ้ำ)
+  const openEvoModal = async (pokemon, evoInfo) => {
     try {
-        // เรียกใช้ฟังก์ชันใหม่ที่อ่าน API + JSON
-        const evoInfo = await fetchNextEvolutionInfo(pokemon.pokemon_id);
-
-        if (!evoInfo.canEvolve) {
-            alert(`${pokemon.name} ไม่สามารถพัฒนาร่างได้อีก หรือยังไม่มีข้อมูล`);
-            setEvolutionLoadingId(null);
-            return;
-        }
-
-        if (pokemon.level < evoInfo.level) {
-            alert(`${pokemon.name} ต้องการ Level ${evoInfo.level} เพื่อพัฒนาร่าง`);
-            setEvolutionLoadingId(null);
-            return;
-        }
-
-        // ดึงรูปร่างถัดไปเพื่อแสดง Preview
         const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${evoInfo.evolveTo}`);
         const nextData = await res.json();
         
@@ -171,6 +150,47 @@ export default function InventoryPage() {
             nextPokePreview,
             loading: false,
         });
+    } catch(e) {
+        console.error(e);
+        alert("ไม่สามารถโหลดข้อมูลร่างถัดไปได้");
+    }
+  };
+
+  // 🔥 Logic ใหม่: เช็คสถานะ + เปลี่ยนหน้าปุ่ม
+  const handleCheckEvolution = async (pokemon) => {
+    // 1. ถ้ามี Cache ว่า READY ให้เปิด Modal เลย ไม่ต้องโหลดใหม่
+    const cached = evoStatusCache[pokemon.id];
+    if (cached?.status === 'READY') {
+        openEvoModal(pokemon, cached.detail);
+        return;
+    }
+    // 2. ถ้า Cache บอกว่า MAX หรือ LOCKED ก็ไม่ต้องทำอะไร (เพราะปุ่ม Disabled อยู่แล้ว แต่กันพลาด)
+    if (cached) return;
+
+    // 3. เริ่มโหลด API
+    setEvolutionLoadingId(pokemon.id);
+    
+    try {
+        const evoInfo = await fetchNextEvolutionInfo(pokemon.pokemon_id);
+        
+        let status = 'READY';
+        
+        if (!evoInfo.canEvolve) {
+            status = 'MAX';
+        } else if (pokemon.level < evoInfo.level) {
+            status = 'LOCKED';
+        }
+
+        // 4. บันทึกสถานะลง Cache
+        setEvoStatusCache(prev => ({
+            ...prev,
+            [pokemon.id]: { status, detail: evoInfo }
+        }));
+
+        // 5. ถ้าพร้อม ก็เปิด Modal เลย
+        if (status === 'READY') {
+            openEvoModal(pokemon, evoInfo);
+        }
 
     } catch(e) {
         console.error("Evolution Check Error:", e);
@@ -180,7 +200,6 @@ export default function InventoryPage() {
     }
   };
 
-  // Logic ยืนยัน Evolution (เหมือนเดิม แต่ใช้ค่าจาก evoInfo ที่ไดนามิกแล้ว)
   const handleEvolveConfirm = async () => {
     const { pokemon, evoInfo } = evoCandidate;
     setEvoCandidate(prev => ({ ...prev, loading: true }));
@@ -189,12 +208,11 @@ export default function InventoryPage() {
         const { data: { user } } = await supabase.auth.getUser();
         const userCoins = profile?.coins || 0;
         const userPokeScale = profile?.poke_scale || 0;
-        const requiredCoins = 2500; // ค่าคงที่สำหรับ Coins (หรือย้ายไปใส่ JSON ก็ได้ถ้าอยากปรับ)
+        const requiredCoins = 2500;
 
         if (userCoins < requiredCoins) throw new Error("Coins ไม่พอ!"); 
         if (userPokeScale < evoInfo.cost) throw new Error("Poke Scale ไม่พอ!");
 
-        // คำนวณ Stats ใหม่
         const oldBaseStats = await getBaseStats(pokemon.pokemon_id);
         const newBaseStats = await getBaseStats(evoInfo.evolveTo);
 
@@ -213,7 +231,6 @@ export default function InventoryPage() {
             spd: calculateNewStat('spd'),
         };
         
-        // DB Transaction
         await supabase.from("profiles").update({ 
             poke_scale: userPokeScale - evoInfo.cost,
             coins: userCoins - requiredCoins 
@@ -224,8 +241,15 @@ export default function InventoryPage() {
             name: evoInfo.name,
             image_url: evoCandidate.nextPokePreview.image_url,
             stats: newStats,
-            rarity: "SR" // Note: อาจต้องปรับ logic Rarity ในอนาคต
+            rarity: "SR" 
         }).eq("id", pokemon.id);
+
+        // Clear Cache ของตัวนี้ทิ้ง เพราะ ID เปลี่ยน หรือข้อมูลเปลี่ยน
+        setEvoStatusCache(prev => {
+            const newCache = { ...prev };
+            delete newCache[pokemon.id];
+            return newCache;
+        });
 
         await fetchInventory();
         await fetchProfile(); 
@@ -240,7 +264,6 @@ export default function InventoryPage() {
     }
   };
 
-  // ... (ส่วน Render JSX เหมือนเดิม) ...
   const filteredItems = filter === "All" ? inventory : inventory.filter(item => item.rarity === filter);
   const getRarityColor = (rarity) => {
     switch (rarity) {
@@ -290,6 +313,37 @@ export default function InventoryPage() {
             const maxExp = poke.level * 100;
             const expPercent = Math.min(100, (poke.exp / maxExp) * 100);
             
+            // 🔥 Logic การแสดงผลปุ่ม
+            const checkStatus = evoStatusCache[poke.id];
+            let buttonContent;
+            let buttonStyle = "bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-purple-500/20";
+            let isDisabled = false;
+
+            if (evolutionLoadingId === poke.id) {
+                // Case 1: กำลังโหลด
+                buttonContent = <Loader2 className="w-3 h-3 animate-spin" />;
+                isDisabled = true;
+            } else if (checkStatus?.status === 'MAX') {
+                // Case 2: ตันแล้ว (ไม่มีร่างพัฒนาต่อ)
+                buttonContent = <span className="font-black tracking-widest text-[10px]">MAX</span>;
+                buttonStyle = "bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed";
+                isDisabled = true;
+            } else if (checkStatus?.status === 'LOCKED') {
+                // Case 3: เลเวลไม่ถึง
+                buttonContent = <><AlertTriangle className="w-3 h-3" /> Need Lv.{checkStatus.detail.level}</>;
+                buttonStyle = "bg-orange-900/40 text-orange-400 border border-orange-500/30 cursor-not-allowed";
+                isDisabled = true;
+            } else if (checkStatus?.status === 'READY') {
+                // Case 4: พร้อม Evo
+                buttonContent = <><ArrowUpCircle className="w-4 h-4 animate-bounce" /> READY EVO</>;
+                buttonStyle = "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/40 animate-pulse border border-emerald-400";
+                isDisabled = false;
+            } else {
+                // Case 5: ยังไม่เคยเช็ค
+                buttonContent = <><Search className="w-3 h-3" /> Check Evo</>;
+                isDisabled = false;
+            }
+
             return (
               <motion.div
                 key={poke.id}
@@ -324,17 +378,11 @@ export default function InventoryPage() {
                 <motion.button
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    onClick={() => handleOpenEvolution(poke)}
-                    disabled={evolutionLoadingId === poke.id}
-                    className="mt-3 w-full py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white text-xs font-bold shadow-lg shadow-purple-500/20 flex items-center justify-center gap-1 z-20 hover:scale-105 transition-transform disabled:bg-slate-700 disabled:from-slate-700 disabled:to-slate-700 disabled:shadow-none"
+                    onClick={() => handleCheckEvolution(poke)}
+                    disabled={isDisabled || evolutionLoadingId === poke.id}
+                    className={`mt-3 w-full py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 z-20 ${buttonStyle} ${!isDisabled ? 'hover:scale-105 active:scale-95' : ''}`}
                   >
-                    {evolutionLoadingId === poke.id ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <>
-                        <ArrowUpCircle className="w-3 h-3" /> Check Evo
-                      </>
-                    )}
+                    {buttonContent}
                 </motion.button>
               </motion.div>
             );

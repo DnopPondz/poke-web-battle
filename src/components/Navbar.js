@@ -43,9 +43,9 @@ export default function Navbar() {
                 {currentProfile?.full_name || "Trainer"}
               </span>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-emerald-400 font-mono bg-emerald-400/10 px-1.5 rounded">
+                {/* <span className="text-xs text-emerald-400 font-mono bg-emerald-400/10 px-1.5 rounded">
                   Lv. {currentProfile?.level || 1}
-                </span>
+                </span> */}
                 <div className="hidden md:block w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                   <div className="h-full bg-emerald-500 w-[40%]"></div> 
                 </div>
