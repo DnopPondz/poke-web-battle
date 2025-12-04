@@ -31,7 +31,7 @@ export default function StarterPage() {
           .from("profiles")
           .select("reroll_count")
           .eq("id", user.id)
-          .single();
+          .single(); // <--- จุดที่น่าสงสัย 1
 
         if (profile) {
           setRerollsLeft(profile.reroll_count);
@@ -41,6 +41,7 @@ export default function StarterPage() {
         await rollStarters();
       } catch (err) {
         console.error(err);
+        // <--- จุดที่น่าสงสัย 2: ถ้า Error ตรงนี้ setLoading(false) จะทำงานไหม?
       } finally {
         setLoading(false);
       }
@@ -48,7 +49,6 @@ export default function StarterPage() {
 
     initData();
   }, []);
-
   // ฟังก์ชันสุ่มโปเกมอน
   const rollStarters = async () => {
     setLoading(true);

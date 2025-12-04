@@ -34,13 +34,11 @@ export default function RegisterPage() {
       return;
     }
 
-   try {
+    try {
       const { error } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
         options: {
-          // เพิ่มบรรทัดนี้ครับ 👇
-          emailRedirectTo: `${window.location.origin}/login`, 
           data: {
             full_name: formData.fullName,
             avatar_url: `https://api.dicebear.com/7.x/adventurer/svg?seed=${formData.fullName}`,
