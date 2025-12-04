@@ -1,15 +1,15 @@
+// src/app/game/battle/page.js
 "use client";
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Swords, ArrowLeft, RotateCcw, Trophy, ArrowUpCircle, Clock } from "lucide-react"; // ตัด icon ที่ไม่ได้ใช้ออก
+import { Swords, ArrowLeft, RotateCcw, Trophy, ArrowUpCircle, Clock, Loader2 } from "lucide-react"; 
 import Link from "next/link";
 import { useProfileStore } from "@/store/profileStore";
 import { processBattleWin } from "@/actions/gameActions";
 
-// 🔥 Import ใหม่
 import { getTypeEffectiveness, getEffectivenessMessage } from "@/lib/battleLogic";
 import { getMovesForPokemon } from "@/lib/moves";
 
@@ -18,6 +18,7 @@ export default function BattlePage() {
   const { fetchProfile } = useProfileStore(); 
   
   const [loading, setLoading] = useState(true);
+  const [processingReward, setProcessingReward] = useState(false); // 🔥 เพิ่ม State: รอคำนวณรางวัล
   const [player, setPlayer] = useState(null);
   const [enemy, setEnemy] = useState(null);
   const [turn, setTurn] = useState(1);
@@ -60,7 +61,7 @@ export default function BattlePage() {
         await supabase.from("profiles").update({ energy: profile.energy - 1 }).eq("id", user.id);
         fetchProfile();
 
-        // 1. Try to find Active Pokemon first
+        // 1. Try to find Active Pokemon
         let { data: myPoke } = await supabase
           .from("inventory")
           .select("*")
@@ -69,7 +70,7 @@ export default function BattlePage() {
           .limit(1)
           .maybeSingle();
 
-        // 2. If no Active Pokemon, fallback to highest Level one
+        // 2. Fallback to highest Level
         if (!myPoke) {
             const { data: fallbackPoke } = await supabase
             .from("inventory")
@@ -90,7 +91,6 @@ export default function BattlePage() {
         const pData = await pRes.json();
         const pType = pData.types[0].type.name;
         
-        // 🔥 ใช้ฟังก์ชันใหม่ดึง Moves (ตาม Pokemon ID)
         const initMoves = getMovesForPokemon(myPoke.pokemon_id, pType).map(m => ({ ...m, currentCooldown: 0 }));
 
         setPlayer({
@@ -172,7 +172,6 @@ export default function BattlePage() {
     const statFactor = attacker.stats.atk / defender.stats.def;
     const baseDamage = ((levelFactor * move.power * statFactor) / 50) + 2;
     
-    // 🔥 คำนวณ Type Multiplier
     const typeMultiplier = getTypeEffectiveness(move.type, defender.type);
     const effectivenessMsg = getEffectivenessMessage(typeMultiplier);
 
@@ -180,16 +179,13 @@ export default function BattlePage() {
     const isCrit = Math.random() < 0.0625;
     const critMult = isCrit ? 1.5 : 1;
 
-    // 🔥 รวม Multiplier เข้าไปใน Damage
     let finalDamage = Math.floor(baseDamage * random * critMult * typeMultiplier);
-    
-    const minDamage = Math.max(1, Math.floor(attacker.level / 5)); // ปรับ Minimum damage ให้ต่ำลงหน่อยเผื่อตีนาน
+    const minDamage = Math.max(1, Math.floor(attacker.level / 5));
     if (finalDamage < minDamage) finalDamage = minDamage;
 
     const newHp = Math.max(0, defender.currentHp - finalDamage);
     setDefenderState(prev => ({ ...prev, currentHp: newHp }));
 
-    // 🔥 เพิ่มข้อความ Effectiveness ลงใน Log
     let logMsg = `${attacker.name} used ${move.name}! ${isCrit ? "(Crit!)" : ""} -${finalDamage}`;
     if (effectivenessMsg) logMsg += ` (${effectivenessMsg})`;
     
@@ -219,6 +215,7 @@ export default function BattlePage() {
   const handleEndGame = async (isWin) => {
     if (!isWin) return;
     
+    setProcessingReward(true); // 🔥 เริ่มแสดง Loading
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -227,7 +224,9 @@ export default function BattlePage() {
 
       if (result.success) {
         const { expGained, coinGained, scaleDrop, leveledUp, oldLevel, newLevel } = result.data;
-        fetchProfile(); 
+        
+        await fetchProfile(); 
+        
         setBattleResult({
           expGained,
           coinGained,
@@ -238,11 +237,14 @@ export default function BattlePage() {
         });
       } else {
         console.error("Battle Processing Error:", result.error);
-        alert("เกิดข้อผิดพลาดในการบันทึกผลการต่อสู้");
+        alert("เกิดข้อผิดพลาดในการบันทึกผลการต่อสู้: " + result.error);
       }
 
     } catch (error) {
       console.error("Client Battle Error:", error);
+      alert("Error: " + error.message);
+    } finally {
+        setProcessingReward(false); // 🔥 หยุดแสดง Loading
     }
   };
 
@@ -260,7 +262,6 @@ export default function BattlePage() {
 
       <div className="flex-1 w-full max-w-5xl flex flex-col justify-center items-center gap-12 md:gap-4 md:flex-row md:justify-between px-4 md:px-20 relative">
         <div className="relative w-full max-w-xs flex flex-col items-center md:items-end order-1 md:order-2">
-          {/* 🔥 ส่ง Type ไปให้การ์ดแสดงผลด้วย */}
           <BattleCard pokemon={enemy} isEnemy={true} isAttacking={!isPlayerTurn && gameState === 'playing'} />
         </div>
         <div className="relative w-full max-w-xs flex flex-col items-center md:items-start order-2 md:order-1">
@@ -299,32 +300,41 @@ export default function BattlePage() {
           ) : (
             <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-2 bg-slate-900/90 border border-slate-700 p-6 rounded-2xl shadow-2xl">
               {gameState === 'win' ? (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-center gap-2 text-yellow-400">
-                    <Trophy className="w-8 h-8" />
-                    <h2 className="text-3xl font-bold">VICTORY!</h2>
-                  </div>
-                  <div className="flex justify-center gap-4 text-sm">
-                    <span className="bg-slate-800 px-3 py-1 rounded text-emerald-400">+{battleResult.expGained} EXP</span>
-                    <span className="bg-slate-800 px-3 py-1 rounded text-yellow-400">+{battleResult.coinGained} Coins</span>
-                    <span className="bg-slate-800 px-3 py-1 rounded text-cyan-400">+{battleResult.scaleDrop} Scale</span>
-                  </div>
-                  {battleResult.leveledUp && (
-                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="bg-gradient-to-r from-blue-600 to-cyan-600 p-4 rounded-xl mx-auto max-w-sm shadow-lg border border-blue-400">
-                      <div className="flex items-center justify-center gap-2 font-bold text-lg mb-2"><ArrowUpCircle className="w-6 h-6 animate-bounce" /> Level Up!</div>
-                      <div className="flex justify-center items-center gap-4">
-                        <div className="text-right"><p className="text-sm opacity-80">Lv.{battleResult.oldLevel}</p></div>
-                        <div className="text-2xl">➔</div>
-                        <div className="text-left"><p className="text-sm text-yellow-300 font-bold">Lv.{battleResult.newLevel}</p></div>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
+                // 🔥 เงื่อนไข: แสดง Loading ถ้ากำลังคำนวณ หรือ แสดงผลถ้าเสร็จแล้ว
+                processingReward ? (
+                    <div className="flex flex-col items-center justify-center py-8 space-y-4">
+                        <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
+                        <p className="text-slate-300 font-bold animate-pulse">กำลังคำนวณรางวัล...</p>
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                    <div className="flex items-center justify-center gap-2 text-yellow-400">
+                        <Trophy className="w-8 h-8" />
+                        <h2 className="text-3xl font-bold">VICTORY!</h2>
+                    </div>
+                    <div className="flex justify-center gap-4 text-sm">
+                        <span className="bg-slate-800 px-3 py-1 rounded text-emerald-400">+{battleResult.expGained} EXP</span>
+                        <span className="bg-slate-800 px-3 py-1 rounded text-yellow-400">+{battleResult.coinGained} Coins</span>
+                        <span className="bg-slate-800 px-3 py-1 rounded text-cyan-400">+{battleResult.scaleDrop} Scale</span>
+                    </div>
+                    {battleResult.leveledUp && (
+                        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="bg-gradient-to-r from-blue-600 to-cyan-600 p-4 rounded-xl mx-auto max-w-sm shadow-lg border border-blue-400">
+                        <div className="flex items-center justify-center gap-2 font-bold text-lg mb-2"><ArrowUpCircle className="w-6 h-6 animate-bounce" /> Level Up!</div>
+                        <div className="flex justify-center items-center gap-4">
+                            <div className="text-right"><p className="text-sm opacity-80">Lv.{battleResult.oldLevel}</p></div>
+                            <div className="text-2xl">➔</div>
+                            <div className="text-left"><p className="text-sm text-yellow-300 font-bold">Lv.{battleResult.newLevel}</p></div>
+                        </div>
+                        </motion.div>
+                    )}
+                    </div>
+                )
               ) : (
                 <div><h2 className="text-3xl font-bold text-red-500 mb-2">DEFEATED</h2><p className="text-slate-400 text-sm">กลับไปฝึกฝนมาใหม่นะ...</p></div>
               )}
               <div className="flex gap-4 justify-center mt-6">
-                <button onClick={() => window.location.reload()} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold flex items-center gap-2 transition"><RotateCcw className="w-4 h-4" /> Battle Again</button>
+                {/* ปิดปุ่มกดถ้ากำลังโหลดรางวัลอยู่ */}
+                <button onClick={() => window.location.reload()} disabled={processingReward} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"><RotateCcw className="w-4 h-4" /> Battle Again</button>
                 <Link href="/game"><button className="px-6 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-bold transition">Return Home</button></Link>
               </div>
             </motion.div>
@@ -335,7 +345,6 @@ export default function BattlePage() {
   );
 }
 
-// เพิ่มการแสดง Type ที่การ์ด
 function BattleCard({ pokemon, isEnemy, isAttacking }) {
   if (!pokemon) return null;
   const hpPercent = (pokemon.currentHp / pokemon.maxHp) * 100;
@@ -345,7 +354,6 @@ function BattleCard({ pokemon, isEnemy, isAttacking }) {
         <div className="flex justify-between items-baseline gap-4 mb-1">
           <div className="flex items-center gap-2">
              <h3 className="font-bold text-white text-lg capitalize">{pokemon.name}</h3>
-             {/* แสดงธาตุ */}
              <span className="text-[10px] uppercase bg-white/10 px-1.5 py-0.5 rounded text-slate-300">{pokemon.type}</span>
           </div>
           <span className="text-xs text-yellow-400 font-mono">Lv.{pokemon.level}</span>
