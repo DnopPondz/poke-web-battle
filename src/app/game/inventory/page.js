@@ -10,6 +10,7 @@ import { useProfileStore } from "@/store/profileStore";
 import EvolutionModal from "@/components/EvolutionModal"; 
 import { getEvolutionCost } from "@/lib/evolutionLibrary";
 import evolutionOverrides from "@/app/pokedexdata/evolution_settings.json";
+import { getPokemonData } from "@/lib/pokemonService";
 
 // --- Helper Functions ---
 
@@ -72,22 +73,6 @@ async function fetchNextEvolutionInfo(pokemonId) {
     }
 
     return { canEvolve: false };
-}
-
-async function getBaseStats(id) {
-    const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
-    if (!res.ok) throw new Error(`PokeAPI status: ${res.status}`); 
-    const data = await res.json();
-    const getStat = (name) => data.stats.find(s => s.stat.name === name)?.base_stat || 0;
-    
-    return {
-        hp: getStat('hp'),
-        atk: getStat('attack'),
-        def: getStat('defense'),
-        spd: getStat('speed'),
-        image_url: data.sprites.other["official-artwork"].front_default,
-        name: data.name
-    };
 }
 
 // --- Main Component ---
@@ -172,12 +157,11 @@ export default function InventoryPage() {
   // Function to open Modal (reusable)
   const openEvoModal = async (pokemon, evoInfo) => {
     try {
-        const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${evoInfo.evolveTo}`);
-        const nextData = await res.json();
+        const nextData = await getPokemonData(evoInfo.evolveTo);
         
         const nextPokePreview = {
             name: evoInfo.name,
-            image_url: nextData.sprites.other["official-artwork"].front_default,
+            image_url: nextData.image_url,
         };
 
         setEvoCandidate({
@@ -249,12 +233,12 @@ export default function InventoryPage() {
         if (userCoins < requiredCoins) throw new Error("Coins ไม่พอ!"); 
         if (userPokeScale < evoInfo.cost) throw new Error("Poke Scale ไม่พอ!");
 
-        const oldBaseStats = await getBaseStats(pokemon.pokemon_id);
-        const newBaseStats = await getBaseStats(evoInfo.evolveTo);
+        const oldBaseStats = await getPokemonData(pokemon.pokemon_id);
+        const newBaseStats = await getPokemonData(evoInfo.evolveTo);
 
         const calculateNewStat = (statName) => {
-            const oldBase = oldBaseStats[statName];
-            const newBase = newBaseStats[statName];
+            const oldBase = oldBaseStats.stats[statName];
+            const newBase = newBaseStats.stats[statName];
             const currentStat = pokemon.stats[statName];
             if (oldBase === 0 || newBase === 0) return currentStat; 
             return Math.floor(currentStat * (newBase / oldBase));
