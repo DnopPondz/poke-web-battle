@@ -100,12 +100,13 @@ export default function InventoryPage() {
   const [inventory, setInventory] = useState([]);
   const [filter, setFilter] = useState("All");
   
-  // State สำหรับ Loading ของปุ่ม
+  // State for button loading
   const [evolutionLoadingId, setEvolutionLoadingId] = useState(null);
-  // State สำหรับ Modal
+  const [activeLoadingId, setActiveLoadingId] = useState(null);
+  // State for Modal
   const [evoCandidate, setEvoCandidate] = useState(null);
   
-  // 🔥 New State: เก็บสถานะปุ่มของแต่ละตัว (Cache)
+  // 🔥 New State: Cache button status for each pokemon
   // Format: { [inventoryId]: { status: 'MAX' | 'LOCKED' | 'READY', detail: object } }
   const [evoStatusCache, setEvoStatusCache] = useState({});
 
@@ -118,6 +119,7 @@ export default function InventoryPage() {
         .from("inventory")
         .select("*")
         .eq("user_id", user.id)
+        .order("is_active", { ascending: false }) // Prioritize active pokemon
         .order("level", { ascending: false });
 
       if (error) throw error;
@@ -133,7 +135,41 @@ export default function InventoryPage() {
     fetchInventory();
   }, [fetchInventory]);
 
-  // ฟังก์ชันเปิด Modal (แยกออกมาเพื่อใช้ซ้ำ)
+  const handleSetActive = async (pokemon) => {
+    if (pokemon.is_active) return;
+    setActiveLoadingId(pokemon.id);
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // Optimistic update
+        setInventory(prev => prev.map(p => ({
+            ...p,
+            is_active: p.id === pokemon.id
+        })));
+
+        // Reset all active pokemon for this user first
+        await supabase
+            .from('inventory')
+            .update({ is_active: false })
+            .eq('user_id', user.id);
+
+        await supabase
+            .from('inventory')
+            .update({ is_active: true })
+            .eq('id', pokemon.id);
+
+        await fetchInventory(); // Sync with server
+    } catch (err) {
+        console.error("Set Active Error:", err);
+        alert("Failed to set active pokemon");
+        fetchInventory(); // Revert on error
+    } finally {
+        setActiveLoadingId(null);
+    }
+  };
+
+  // Function to open Modal (reusable)
   const openEvoModal = async (pokemon, evoInfo) => {
     try {
         const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${evoInfo.evolveTo}`);
@@ -156,18 +192,18 @@ export default function InventoryPage() {
     }
   };
 
-  // 🔥 Logic ใหม่: เช็คสถานะ + เปลี่ยนหน้าปุ่ม
+  // 🔥 New Logic: Check status + Update button UI
   const handleCheckEvolution = async (pokemon) => {
-    // 1. ถ้ามี Cache ว่า READY ให้เปิด Modal เลย ไม่ต้องโหลดใหม่
+    // 1. If cached as READY, open Modal immediately
     const cached = evoStatusCache[pokemon.id];
     if (cached?.status === 'READY') {
         openEvoModal(pokemon, cached.detail);
         return;
     }
-    // 2. ถ้า Cache บอกว่า MAX หรือ LOCKED ก็ไม่ต้องทำอะไร (เพราะปุ่ม Disabled อยู่แล้ว แต่กันพลาด)
+    // 2. If cached as MAX or LOCKED, do nothing (button disabled anyway)
     if (cached) return;
 
-    // 3. เริ่มโหลด API
+    // 3. Start loading API
     setEvolutionLoadingId(pokemon.id);
     
     try {
@@ -181,13 +217,13 @@ export default function InventoryPage() {
             status = 'LOCKED';
         }
 
-        // 4. บันทึกสถานะลง Cache
+        // 4. Save status to cache
         setEvoStatusCache(prev => ({
             ...prev,
             [pokemon.id]: { status, detail: evoInfo }
         }));
 
-        // 5. ถ้าพร้อม ก็เปิด Modal เลย
+        // 5. If ready, open Modal
         if (status === 'READY') {
             openEvoModal(pokemon, evoInfo);
         }
@@ -313,33 +349,33 @@ export default function InventoryPage() {
             const maxExp = poke.level * 100;
             const expPercent = Math.min(100, (poke.exp / maxExp) * 100);
             
-            // 🔥 Logic การแสดงผลปุ่ม
+            // 🔥 Logic for button display
             const checkStatus = evoStatusCache[poke.id];
             let buttonContent;
             let buttonStyle = "bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-purple-500/20";
             let isDisabled = false;
 
             if (evolutionLoadingId === poke.id) {
-                // Case 1: กำลังโหลด
+                // Case 1: Loading
                 buttonContent = <Loader2 className="w-3 h-3 animate-spin" />;
                 isDisabled = true;
             } else if (checkStatus?.status === 'MAX') {
-                // Case 2: ตันแล้ว (ไม่มีร่างพัฒนาต่อ)
+                // Case 2: Maxed out (no further evolution)
                 buttonContent = <span className="font-black tracking-widest text-[10px]">MAX</span>;
                 buttonStyle = "bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed";
                 isDisabled = true;
             } else if (checkStatus?.status === 'LOCKED') {
-                // Case 3: เลเวลไม่ถึง
+                // Case 3: Level too low
                 buttonContent = <><AlertTriangle className="w-3 h-3" /> Need Lv.{checkStatus.detail.level}</>;
                 buttonStyle = "bg-orange-900/40 text-orange-400 border border-orange-500/30 cursor-not-allowed";
                 isDisabled = true;
             } else if (checkStatus?.status === 'READY') {
-                // Case 4: พร้อม Evo
+                // Case 4: Ready to Evo
                 buttonContent = <><ArrowUpCircle className="w-4 h-4 animate-bounce" /> READY EVO</>;
                 buttonStyle = "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/40 animate-pulse border border-emerald-400";
                 isDisabled = false;
             } else {
-                // Case 5: ยังไม่เคยเช็ค
+                // Case 5: Not checked yet
                 buttonContent = <><Search className="w-3 h-3" /> Check Evo</>;
                 isDisabled = false;
             }
@@ -375,15 +411,35 @@ export default function InventoryPage() {
                   </div>
                 </div>
 
-                <motion.button
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    onClick={() => handleCheckEvolution(poke)}
-                    disabled={isDisabled || evolutionLoadingId === poke.id}
-                    className={`mt-3 w-full py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 z-20 ${buttonStyle} ${!isDisabled ? 'hover:scale-105 active:scale-95' : ''}`}
-                  >
-                    {buttonContent}
-                </motion.button>
+                <div className="grid grid-cols-2 gap-2 w-full mt-3">
+                    <button
+                        onClick={() => handleSetActive(poke)}
+                        disabled={poke.is_active || activeLoadingId === poke.id}
+                        className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 z-20 border ${
+                            poke.is_active
+                            ? "bg-emerald-500/20 border-emerald-500 text-emerald-400 cursor-default"
+                            : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white"
+                        }`}
+                    >
+                        {activeLoadingId === poke.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : poke.is_active ? (
+                            <><CheckCircle2 className="w-3 h-3" /> Active</>
+                        ) : (
+                            "Set Active"
+                        )}
+                    </button>
+
+                    <motion.button
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => handleCheckEvolution(poke)}
+                        disabled={isDisabled || evolutionLoadingId === poke.id}
+                        className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 z-20 ${buttonStyle} ${!isDisabled ? 'hover:scale-105 active:scale-95' : ''}`}
+                    >
+                        {buttonContent}
+                    </motion.button>
+                </div>
               </motion.div>
             );
           })
