@@ -60,13 +60,26 @@ export default function BattlePage() {
         await supabase.from("profiles").update({ energy: profile.energy - 1 }).eq("id", user.id);
         fetchProfile();
 
-        const { data: myPoke } = await supabase
+        // 1. Try to find Active Pokemon first
+        let { data: myPoke } = await supabase
           .from("inventory")
           .select("*")
           .eq("user_id", user.id)
-          .order("level", { ascending: false })
+          .eq("is_active", true)
           .limit(1)
-          .single();
+          .maybeSingle();
+
+        // 2. If no Active Pokemon, fallback to highest Level one
+        if (!myPoke) {
+            const { data: fallbackPoke } = await supabase
+            .from("inventory")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("level", { ascending: false })
+            .limit(1)
+            .single();
+            myPoke = fallbackPoke;
+        }
 
         if (!myPoke) {
           alert("ไม่พบโปเกมอนในกระเป๋า!");
