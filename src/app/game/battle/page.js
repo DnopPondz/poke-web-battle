@@ -11,7 +11,7 @@ import { processBattleWin } from "@/actions/gameActions";
 
 // 🔥 Import ใหม่
 import { getTypeEffectiveness, getEffectivenessMessage } from "@/lib/battleLogic";
-import { getMovesByType } from "@/lib/moves";
+import { getMovesForPokemon } from "@/lib/moves";
 
 export default function BattlePage() {
   const router = useRouter();
@@ -90,8 +90,8 @@ export default function BattlePage() {
         const pData = await pRes.json();
         const pType = pData.types[0].type.name;
         
-        // 🔥 ใช้ฟังก์ชันใหม่ดึง Moves
-        const initMoves = getMovesByType(pType).map(m => ({ ...m, currentCooldown: 0 }));
+        // 🔥 ใช้ฟังก์ชันใหม่ดึง Moves (ตาม Pokemon ID)
+        const initMoves = getMovesForPokemon(myPoke.pokemon_id, pType).map(m => ({ ...m, currentCooldown: 0 }));
 
         setPlayer({
           ...myPoke,
@@ -124,7 +124,7 @@ export default function BattlePage() {
           currentHp: enemyStats.hp,
           maxHp: enemyStats.hp,
           stats: enemyStats,
-          moves: getMovesByType(eType),
+          moves: getMovesForPokemon(randomId, eType),
         });
 
         setLogs([`Wild ${eData.name} (Lv.${enemyLevel}) appeared!`, "Battle Start!"]);

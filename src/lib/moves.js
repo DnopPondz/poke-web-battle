@@ -40,6 +40,25 @@ export const MOVES_DB = {
   "Heal": { name: "Heal", type: "Support", power: 0, accuracy: 100, effect: "heal", cooldown: 3, icon: <ShieldPlus className="w-4 h-4 text-pink-400" /> },
 };
 
+export const POKEMON_MOVE_POOL = {
+  // Pikachu
+  25: ["Thunder Shock", "Quick Attack", "Thunderbolt", "Thunder"],
+  // Charizard
+  6: ["Ember", "Flamethrower", "Dragon Claw", "Fire Blast"],
+  // Blastoise
+  9: ["Water Gun", "Bubble Beam", "Hydro Pump", "Bite"],
+  // Venusaur
+  3: ["Vine Whip", "Razor Leaf", "Solar Beam", "Earthquake"],
+  // Mewtwo
+  150: ["Psychic", "Shadow Ball", "Hyper Beam", "Heal"],
+  // Gengar
+  94: ["Shadow Ball", "Psychic", "Bite", "Heal"],
+  // Dragonite
+  149: ["Dragon Claw", "Hyper Beam", "Thunder", "Flamethrower"],
+  // Snorlax
+  143: ["Hyper Beam", "Earthquake", "Bite", "Heal"]
+};
+
 export const getMovesByType = (type) => {
   const t = type.toLowerCase();
   // กำหนด Default Moves ตามธาตุ
@@ -55,4 +74,16 @@ export const getMovesByType = (type) => {
   
   // Mapping ชื่อท่าเป็น Object จริง
   return moves.map(m => MOVES_DB[m] || MOVES_DB["Tackle"]);
+};
+
+export const getMovesForPokemon = (pokemonId, type) => {
+  let moveNames = POKEMON_MOVE_POOL[pokemonId];
+
+  if (!moveNames) {
+    // Fallback to type-based if no specific moves are defined
+    return getMovesByType(type);
+  }
+
+  // Map names to objects
+  return moveNames.map(m => MOVES_DB[m] || MOVES_DB["Tackle"]);
 };
