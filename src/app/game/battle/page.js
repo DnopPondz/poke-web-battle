@@ -4,32 +4,14 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Swords, ArrowLeft, RotateCcw, Trophy, Zap, Flame, Droplets, Leaf, Star, ShieldPlus, ArrowUpCircle, Clock, Gem } from "lucide-react";
+import { Swords, ArrowLeft, RotateCcw, Trophy, ArrowUpCircle, Clock } from "lucide-react"; // ตัด icon ที่ไม่ได้ใช้ออก
 import Link from "next/link";
 import { useProfileStore } from "@/store/profileStore";
+import { processBattleWin } from "@/actions/gameActions";
 
-const MOVES_DB = {
-  "Tackle": { name: "Tackle", type: "Normal", power: 50, accuracy: 100, cooldown: 0, icon: <Star className="w-4 h-4" /> },
-  "Scratch": { name: "Scratch", type: "Normal", power: 50, accuracy: 100, cooldown: 0, icon: <Swords className="w-4 h-4" /> },
-  "Quick Attack": { name: "Quick Attack", type: "Normal", power: 50, accuracy: 100, cooldown: 0, icon: <Zap className="w-4 h-4" /> },
-  "Ember": { name: "Ember", type: "Fire", power: 55, accuracy: 100, cooldown: 0, icon: <Flame className="w-4 h-4 text-orange-500" /> },
-  "Water Gun": { name: "Water Gun", type: "Water", power: 55, accuracy: 100, cooldown: 0, icon: <Droplets className="w-4 h-4 text-blue-400" /> },
-  "Vine Whip": { name: "Vine Whip", type: "Grass", power: 55, accuracy: 100, cooldown: 0, icon: <Leaf className="w-4 h-4 text-green-500" /> },
-  "Thunder Shock": { name: "Thunder Shock", type: "Electric", power: 55, accuracy: 100, cooldown: 0, icon: <Zap className="w-4 h-4 text-yellow-400" /> },
-  "Flamethrower": { name: "Flamethrower", type: "Fire", power: 100, accuracy: 100, cooldown: 2, icon: <Flame className="w-4 h-4 text-red-500" /> },
-  "Hydro Pump": { name: "Hydro Pump", type: "Water", power: 120, accuracy: 85, cooldown: 2, icon: <Droplets className="w-4 h-4 text-blue-600" /> },
-  "Razor Leaf": { name: "Razor Leaf", type: "Grass", power: 70, accuracy: 95, cooldown: 1, icon: <Leaf className="w-4 h-4 text-emerald-600" /> },
-  "Heal": { name: "Heal", type: "Support", power: 0, accuracy: 100, effect: "heal", cooldown: 3, icon: <ShieldPlus className="w-4 h-4 text-pink-400" /> },
-};
-
-const EVOLUTION_CHAIN = {
-  1: { evolveTo: 2, level: 16, name: "Ivysaur" },
-  2: { evolveTo: 3, level: 32, name: "Venusaur" },
-  4: { evolveTo: 5, level: 16, name: "Charmeleon" },
-  5: { evolveTo: 6, level: 36, name: "Charizard" },
-  7: { evolveTo: 8, level: 16, name: "Wartortle" },
-  8: { evolveTo: 9, level: 36, name: "Blastoise" },
-};
+// 🔥 Import ใหม่
+import { getTypeEffectiveness, getEffectivenessMessage } from "@/lib/battleLogic";
+import { getMovesByType } from "@/lib/moves";
 
 export default function BattlePage() {
   const router = useRouter();
@@ -49,7 +31,7 @@ export default function BattlePage() {
     leveledUp: false,
     oldLevel: 0,
     newLevel: 0,
-    scaleDrop: 0 // 🔥 เพิ่ม scaleDrop
+    scaleDrop: 0 
   });
 
   // AI Turn Logic
@@ -70,16 +52,14 @@ export default function BattlePage() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return router.replace("/login");
 
-        // 1. Energy Check & Deduct
         const { data: profile } = await supabase.from("profiles").select("energy").eq("id", user.id).single();
         if (!profile || profile.energy < 1) {
           alert("พลังงานหมด! (Energy 0/50)");
           return router.replace("/game");
         }
         await supabase.from("profiles").update({ energy: profile.energy - 1 }).eq("id", user.id);
-        fetchProfile(); // อัปเดต Navbar ทันทีหลังตัด Energy
+        fetchProfile();
 
-        // 2. Load Player Pokemon
         const { data: myPoke } = await supabase
           .from("inventory")
           .select("*")
@@ -96,6 +76,8 @@ export default function BattlePage() {
         const pRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${myPoke.pokemon_id}`);
         const pData = await pRes.json();
         const pType = pData.types[0].type.name;
+        
+        // 🔥 ใช้ฟังก์ชันใหม่ดึง Moves
         const initMoves = getMovesByType(pType).map(m => ({ ...m, currentCooldown: 0 }));
 
         setPlayer({
@@ -106,7 +88,6 @@ export default function BattlePage() {
           moves: initMoves,
         });
 
-        // 3. Random Enemy (Balanced)
         const randomId = Math.floor(Math.random() * 151) + 1;
         const eRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${randomId}`);
         const eData = await eRes.json();
@@ -145,16 +126,6 @@ export default function BattlePage() {
     initBattle();
   }, []);
 
-  const getMovesByType = (type) => {
-    let moves = ["Tackle", "Scratch"];
-    if (type === "fire") moves = ["Scratch", "Ember", "Flamethrower", "Heal"];
-    else if (type === "water") moves = ["Tackle", "Water Gun", "Hydro Pump", "Heal"];
-    else if (type === "grass") moves = ["Tackle", "Vine Whip", "Razor Leaf", "Heal"];
-    else if (type === "electric") moves = ["Quick Attack", "Thunder Shock", "Tackle", "Heal"];
-    else moves = ["Tackle", "Scratch", "Quick Attack", "Heal"];
-    return moves.map(m => MOVES_DB[m]);
-  };
-
   const handleTurn = (attacker, defender, setDefenderState, move, role) => {
     if (role === "player" && move.currentCooldown > 0) return;
 
@@ -187,19 +158,29 @@ export default function BattlePage() {
     const levelFactor = (2 * attacker.level / 5) + 2;
     const statFactor = attacker.stats.atk / defender.stats.def;
     const baseDamage = ((levelFactor * move.power * statFactor) / 50) + 2;
+    
+    // 🔥 คำนวณ Type Multiplier
+    const typeMultiplier = getTypeEffectiveness(move.type, defender.type);
+    const effectivenessMsg = getEffectivenessMessage(typeMultiplier);
+
     const random = (Math.floor(Math.random() * 16) + 85) / 100;
     const isCrit = Math.random() < 0.0625;
     const critMult = isCrit ? 1.5 : 1;
 
-    let finalDamage = Math.floor(baseDamage * random * critMult);
+    // 🔥 รวม Multiplier เข้าไปใน Damage
+    let finalDamage = Math.floor(baseDamage * random * critMult * typeMultiplier);
     
-    const minDamage = Math.max(2, Math.floor(attacker.level / 2));
+    const minDamage = Math.max(1, Math.floor(attacker.level / 5)); // ปรับ Minimum damage ให้ต่ำลงหน่อยเผื่อตีนาน
     if (finalDamage < minDamage) finalDamage = minDamage;
 
     const newHp = Math.max(0, defender.currentHp - finalDamage);
     setDefenderState(prev => ({ ...prev, currentHp: newHp }));
 
-    setLogs(prev => [`${attacker.name} used ${move.name}! ${isCrit ? "(Crit!)" : ""} -${finalDamage} HP`, ...prev.slice(0, 3)]);
+    // 🔥 เพิ่มข้อความ Effectiveness ลงใน Log
+    let logMsg = `${attacker.name} used ${move.name}! ${isCrit ? "(Crit!)" : ""} -${finalDamage}`;
+    if (effectivenessMsg) logMsg += ` (${effectivenessMsg})`;
+    
+    setLogs(prev => [logMsg, ...prev.slice(0, 3)]);
 
     if (newHp === 0) {
       setGameState(role === "player" ? "win" : "lose");
@@ -222,74 +203,33 @@ export default function BattlePage() {
     }
   };
 
-  // 🔥 ฟังก์ชันจบเกม: EXP, Coin, และ SCALE Drop 🔥
   const handleEndGame = async (isWin) => {
     if (!isWin) return;
     
     try {
-      const expGain = 50 * enemy.level;
-      const coinGain = 50 + (enemy.level * 10);
-      const scaleDrop = Math.floor(Math.random() * 20) + 1; // 🔥 Drop Scale 1-20
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      let updatedStats = { ...player.stats };
-      let newLevel = player.level;
-      let newExp = player.exp + expGain;
-      let leveledUp = false;
-      const oldLevel = player.level;
+      const result = await processBattleWin(user.id, player.id, enemy.level);
 
-      // Loop Level Up
-      while (newExp >= newLevel * 100) {
-        newExp -= newLevel * 100;
-        newLevel++;
-        leveledUp = true;
-
-        // Stat Growth
-        updatedStats.hp += Math.floor(Math.random() * 3) + 2;
-        updatedStats.atk += Math.floor(Math.random() * 2) + 1;
-        updatedStats.def += Math.floor(Math.random() * 2) + 1;
-        updatedStats.spd += Math.floor(Math.random() * 2) + 1;
+      if (result.success) {
+        const { expGained, coinGained, scaleDrop, leveledUp, oldLevel, newLevel } = result.data;
+        fetchProfile(); 
+        setBattleResult({
+          expGained,
+          coinGained,
+          leveledUp,
+          oldLevel,
+          newLevel,
+          scaleDrop 
+        });
+      } else {
+        console.error("Battle Processing Error:", result.error);
+        alert("เกิดข้อผิดพลาดในการบันทึกผลการต่อสู้");
       }
 
-      // 1. อัปเดต Inventory
-      const { error: invError } = await supabase
-        .from("inventory")
-        .update({
-          level: newLevel,
-          exp: newExp,
-          stats: updatedStats, 
-        })
-        .eq("id", player.id); 
-
-      if (invError) throw invError;
-
-      // 2. อัปเดตเงินและ Poke Scale User
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("coins, poke_scale").eq("id", user.id).single();
-
-      const { error: profileError } = await supabase
-          .from("profiles")
-          .update({ 
-              coins: profile.coins + coinGain,
-              poke_scale: profile.poke_scale + scaleDrop // 🔥 บันทึก Scale
-          })
-          .eq("id", user.id);
-
-      if (profileError) throw profileError;
-
-      // 3. สั่งให้ Global Store ดึงข้อมูล Coins/Energy/Scale ล่าสุดทันที
-      fetchProfile(); 
-
-      setBattleResult({
-        expGained: expGain,
-        coinGained: coinGain,
-        leveledUp,
-        oldLevel,
-        newLevel,
-        scaleDrop // 🔥 ส่ง Scale Drop ไปแสดงผล
-      });
-
     } catch (error) {
-      console.error("Save Error:", error);
+      console.error("Client Battle Error:", error);
     }
   };
 
@@ -307,6 +247,7 @@ export default function BattlePage() {
 
       <div className="flex-1 w-full max-w-5xl flex flex-col justify-center items-center gap-12 md:gap-4 md:flex-row md:justify-between px-4 md:px-20 relative">
         <div className="relative w-full max-w-xs flex flex-col items-center md:items-end order-1 md:order-2">
+          {/* 🔥 ส่ง Type ไปให้การ์ดแสดงผลด้วย */}
           <BattleCard pokemon={enemy} isEnemy={true} isAttacking={!isPlayerTurn && gameState === 'playing'} />
         </div>
         <div className="relative w-full max-w-xs flex flex-col items-center md:items-start order-2 md:order-1">
@@ -381,6 +322,7 @@ export default function BattlePage() {
   );
 }
 
+// เพิ่มการแสดง Type ที่การ์ด
 function BattleCard({ pokemon, isEnemy, isAttacking }) {
   if (!pokemon) return null;
   const hpPercent = (pokemon.currentHp / pokemon.maxHp) * 100;
@@ -388,7 +330,11 @@ function BattleCard({ pokemon, isEnemy, isAttacking }) {
     <div className={`w-full ${isEnemy ? "text-right" : "text-left"}`}>
       <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-xl border border-slate-600 shadow-lg mb-4 inline-block min-w-[200px]">
         <div className="flex justify-between items-baseline gap-4 mb-1">
-          <h3 className="font-bold text-white text-lg capitalize">{pokemon.name}</h3>
+          <div className="flex items-center gap-2">
+             <h3 className="font-bold text-white text-lg capitalize">{pokemon.name}</h3>
+             {/* แสดงธาตุ */}
+             <span className="text-[10px] uppercase bg-white/10 px-1.5 py-0.5 rounded text-slate-300">{pokemon.type}</span>
+          </div>
           <span className="text-xs text-yellow-400 font-mono">Lv.{pokemon.level}</span>
         </div>
         <div className="w-full h-2.5 bg-slate-700 rounded-full overflow-hidden mb-1">

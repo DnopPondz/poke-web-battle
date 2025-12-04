@@ -1,82 +1,75 @@
+// src/app/game/layout.js
 "use client";
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { useRouter, usePathname } from "next/navigation"; // เพิ่ม usePathname
+import { useRouter, usePathname } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import { useProfileStore } from "@/store/profileStore";
+import { checkAndRegenerateEnergy } from "@/actions/energyActions";
 
 export default function GameLayout({ children }) {
   const router = useRouter();
-  const pathname = usePathname(); // เช็ค URL ปัจจุบัน
+  const pathname = usePathname();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  
+  const { profile, fetchProfile } = useProfileStore();
 
+  // 1. Check Login & Init
   useEffect(() => {
-    const checkSessionAndStarter = async () => {
-      try {
-        // 1. เช็ค Login
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          router.replace("/login");
-          return;
-        }
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.replace("/login"); return; }
 
-        // 2. เช็คว่ามี Starter หรือยัง (นับจำนวนโปเกมอนใน Inventory)
-        const { count, error } = await supabase
-          .from("inventory")
-          .select("*", { count: 'exact', head: true }) // head: true คือนับอย่างเดียว ไม่ดึงข้อมูล ประหยัดเน็ต
-          .eq("user_id", session.user.id);
+      // เช็ค Energy ครั้งแรกทันทีที่เข้าเกม
+      await checkAndRegenerateEnergy(session.user.id);
+      await fetchProfile();
 
-        if (error) throw error;
+      // เช็ค Starter (Logic เดิม)
+      const { count } = await supabase.from("inventory").select("*", { count: 'exact', head: true }).eq("user_id", session.user.id);
+      const hasStarter = count > 0;
+      const isStarterPage = pathname === "/game/starter";
 
-        const hasStarter = count > 0;
-        const isStarterPage = pathname === "/game/starter";
-
-        // Logic การ Redirect
-        if (!hasStarter && !isStarterPage) {
-          // ถ้ายังไม่มีตัว และไม่ได้อยู่หน้าเลือก -> บังคับไปเลือก
-          router.replace("/game/starter");
-          return; // หยุดโหลดต่อ
-        } else if (hasStarter && isStarterPage) {
-          // ถ้ามีตัวแล้ว แต่อยู่หน้าเลือก -> ไล่กลับหน้าเกม
-          router.replace("/game");
-          return; // หยุดโหลดต่อ
-        }
-
-        // ถ้าผ่านทุกเงื่อนไข
-        setIsAuthenticated(true);
-        
-      } catch (error) {
-        console.error("Check Error:", error);
-        router.replace("/login");
-      } finally {
-        setIsLoading(false);
-      }
+      if (!hasStarter && !isStarterPage) router.replace("/game/starter");
+      else if (hasStarter && isStarterPage) router.replace("/game");
+      else setIsAuthenticated(true);
+      
+      setIsLoading(false);
     };
+    init();
+  }, []);
 
-    checkSessionAndStarter();
-  }, [router, pathname]);
+  // 2. 🔥 Loop เช็คเวลาทุก 1 วินาที
+  useEffect(() => {
+    if (!profile?.last_energy_updated_at || profile.energy >= 50) return;
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-900 text-white">
-        <Loader2 className="animate-spin h-10 w-10 text-emerald-500" />
-        <p className="ml-3 text-emerald-500 animate-pulse">Loading World...</p>
-      </div>
-    );
-  }
+    const timer = setInterval(async () => {
+      const now = new Date();
+      const lastUpdate = new Date(profile.last_energy_updated_at);
+      const diffMinutes = (now - lastUpdate) / 1000 / 60;
 
+      // ถ้าเวลาเกิน 5 นาที ให้เรียก Server Action
+      if (diffMinutes >= 5) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            await checkAndRegenerateEnergy(user.id);
+            await fetchProfile(); // ดึงข้อมูลใหม่มาแสดง
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [profile]); // ทำงานเมื่อ profile เปลี่ยน
+
+  if (isLoading) return <div className="flex h-screen items-center justify-center bg-slate-900 text-white">Loading...</div>;
   if (!isAuthenticated) return null;
 
   return (
     <div className="min-h-screen bg-slate-900">
-      {/* ถ้าอยู่หน้าเลือก Starter ไม่ต้องโชว์ Navbar ก็ได้ จะได้ดู Cinematic */}
       {pathname !== "/game/starter" && <Navbar />}
-      
-      <div className={pathname !== "/game/starter" ? "pb-20" : ""}> 
-        {children}
-      </div>
+      <div className={pathname !== "/game/starter" ? "pb-20" : ""}>{children}</div>
     </div>
   );
 }
